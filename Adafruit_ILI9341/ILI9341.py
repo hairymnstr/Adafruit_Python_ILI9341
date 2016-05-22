@@ -20,10 +20,6 @@
 # THE SOFTWARE.
 import numbers
 import time
-import numpy as np
-
-from PIL import Image
-from PIL import ImageDraw
 
 import Adafruit_GPIO as GPIO
 import Adafruit_GPIO.SPI as SPI
@@ -97,6 +93,8 @@ ILI9341_MAGENTA     = 0xF81F
 ILI9341_YELLOW      = 0xFFE0
 ILI9341_WHITE       = 0xFFFF
 
+ILI9341_16BIT       = 0x55
+ILI9341_18BIT       = 0x66
 
 def color565(r, g, b):
     """Convert red, green, blue components to a 16-bit 565 RGB value. Components
@@ -116,18 +114,21 @@ class ILI9341(object):
     """Representation of an ILI9341 TFT LCD."""
 
     def __init__(self, dc, spi, rst=None, gpio=None, width=ILI9341_TFTWIDTH,
-        height=ILI9341_TFTHEIGHT):
+        height=ILI9341_TFTHEIGHT, bgr=False, bit_depth=ILI9341_16BIT):
         """Create an instance of the display using SPI communication.  Must
         provide the GPIO pin number for the D/C pin and the SPI driver.  Can
         optionally provide the GPIO pin number for the reset pin as the rst
         parameter.
         """
+        assert bit_depth in (ILI9341_16BIT, ILI9341_18BIT)
         self._dc = dc
         self._rst = rst
         self._spi = spi
         self._gpio = gpio
         self.width = width
         self.height = height
+        self.bgr = bgr
+        self.bit_depth = bit_depth
         if self._gpio is None:
             self._gpio = GPIO.get_platform_gpio()
         # Set DC as output.
@@ -139,8 +140,6 @@ class ILI9341(object):
         spi.set_mode(0)
         spi.set_bit_order(SPI.MSBFIRST)
         spi.set_clock_hz(64000000)
-        # Create an image buffer.
-        self.buffer = Image.new('RGB', (width, height))
 
     def send(self, data, is_data=True, chunk_size=4096):
         """Write a byte or array of bytes to the display. Is_data parameter
@@ -217,9 +216,15 @@ class ILI9341(object):
         self.command(ILI9341_VMCTR2)    # VCM control2
         self.data(0x86)                    # --
         self.command(ILI9341_MADCTL)    #  Memory Access Control
-        self.data(0x48)
+        if self.bgr:
+            self.data(0x40)             # colour order blue-green-red
+        else:
+            self.data(0x48)             # colour order red-green-blue
         self.command(ILI9341_PIXFMT)
-        self.data(0x55)
+        if self.bit_depth == ILI9341_16BIT:
+            self.data(0x55)             # colour format RGB 5-6-5 in 1 16bit word
+        else:
+            self.data(0x66)             # colour format RGB 6-6-6 in 3 bytes lowest 2 bits always ignored
         self.command(ILI9341_FRMCTR1)
         self.data(0x00)
         self.data(0x18)
@@ -297,30 +302,3 @@ class ILI9341(object):
         self.data(y1)                    # YEND
         self.command(ILI9341_RAMWR)        # write to RAM
 
-    def display(self, image=None):
-        """Write the display buffer or provided image to the hardware.  If no
-        image parameter is provided the display buffer will be written to the
-        hardware.  If an image is provided, it should be RGB format and the
-        same dimensions as the display hardware.
-        """
-        # By default write the internal buffer to the display.
-        if image is None:
-            image = self.buffer
-        # Set address bounds to entire display.
-        self.set_window()
-        # Convert image to array of 16bit 565 RGB data bytes.
-        # Unfortunate that this copy has to occur, but the SPI byte writing
-        # function needs to take an array of bytes and PIL doesn't natively
-        # store images in 16-bit 565 RGB format.
-        pixelbytes = list(image_to_data(image))
-        # Write data to hardware.
-        self.data(pixelbytes)
-
-    def clear(self, color=(0,0,0)):
-        """Clear the image buffer to the specified RGB color (default black)."""
-        width, height = self.buffer.size
-        self.buffer.putdata([color]*(width*height))
-
-    def draw(self):
-        """Return a PIL ImageDraw instance for 2D drawing on the image buffer."""
-        return ImageDraw.Draw(self.buffer)
